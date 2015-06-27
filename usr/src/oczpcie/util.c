@@ -27,6 +27,7 @@
 #include	<linux/mm.h>
 #include	<linux/pci.h>
 #include	<asm/uaccess.h>
+#include	<linux/version.h>
 
 void ata_get_string(char *result, void *source, int start, int end)
 {
@@ -84,9 +85,13 @@ int check_firmware_version(struct device *dev, char *ata_model, char *ata_fw)
 		ata_fw[len-1] = '\000';
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0)
 	err = strict_strtol(ata_fw, 10, &first);
 	err = strict_strtol(point+1, 10, &second);
-
+#else
+	err = kstrtoul(ata_fw, 10, &first);
+	err = kstrtoul(point+1, 10, &second);
+#endif
 	if (is_e) {
 		// must be at least 3.20
 		if (first < 3)
