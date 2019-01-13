@@ -6,7 +6,7 @@
 # If your platform does not support discard alignment, granularit and zeros, uncomment the following line
 #DISABLE_DISCARD_TUNING := 1
 
-EXTRA_CFLAGS += -DENABLE_VCA
+EXTRA_CFLAGS += -DHAVE_KERNEL_TIMER_SETUP
 ifneq ($(KERNELRELEASE),)
 EXTRA_CFLAGS += -D__LINUX__
 ifeq ($(DISABLE_THREADED_INTERRUPTS), 1)
