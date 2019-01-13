@@ -41,7 +41,7 @@ int oczpcie_getgeo(struct block_device *bdev, struct hd_geometry *geo);
 void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct bio *bio, int retries);
 int oczpcie_issue_command(struct oczpcie_prv_info *mpi, int alloc_flags, struct oczpcie_issue_command *commnd_info);
 void oczpcie_abort_issue_command(struct oczpcie_prv_info *mpi, struct oczpcie_issue_command *commnd_info);
-int oczpcie_get_dev_id_from_block_device(struct block_device *bdev, struct oczpcie_info **oczi);
+int oczpcie_get_dev_id_from_block_device(dev_t bd_bdev, struct request_queue *q, struct oczpcie_info **oczi);
 void oczpcie_reset_card(struct oczpcie_prv_info *priv);
 
 #endif /* OCZZD_IFACE_H_ */

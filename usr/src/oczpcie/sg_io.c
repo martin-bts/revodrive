@@ -136,7 +136,7 @@ int oczpcie_sg_io(struct block_device *bdev, unsigned cmd, unsigned long arg)
 	if (io_hdr.iovec_count != 0)	// FIXME: Need to support SG list
 		return -EINVAL;
 
-	command_info.dev_id = oczpcie_get_dev_id_from_block_device(bdev, &oczi); // temporary id to check it
+	command_info.dev_id = oczpcie_get_dev_id_from_block_device(bdev->bd_dev,bdev_get_queue(bdev), &oczi); // temporary id to check it
 
 	if (unlikely(command_info.dev_id == -1))
 		return -ENODEV;

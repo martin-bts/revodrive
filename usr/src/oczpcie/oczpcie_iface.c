@@ -76,7 +76,11 @@ static void oczpcie_phy_init(struct oczpcie_info *oczi, int phy_id)
 	struct oczpcie_phy *phy = &oczi->phy[phy_id];
 
 	phy->oczi = oczi;
+#ifdef HAVE_KERNEL_TIMER_SETUP
+	timer_setup(&phy->timer, NULL, 0);
+#else
 	init_timer(&phy->timer);
+#endif
 }
 
 static void oczpcie_free(struct oczpcie_info *oczi)
@@ -365,15 +369,13 @@ static int enable_64_bit_pci(struct pci_dev *pdev)
 	return rc;
 }
 
-int oczpcie_get_dev_id_from_block_device(struct block_device *bdev, struct oczpcie_info **oczi)
+int oczpcie_get_dev_id_from_block_device(dev_t bd_bdev, struct request_queue *q, struct oczpcie_info **oczi)
 {
 	struct oczpcie_prv_info *mpi;
-	struct request_queue *q;
 	u8 dev_id;
 
-	dev_id = (MINOR(bdev->bd_dev) >> PARTITION_SHIFT);
+	dev_id = (MINOR(bd_bdev) >> PARTITION_SHIFT);
 
-	q = bdev_get_queue(bdev);
 	mpi = (struct oczpcie_prv_info *)q->queuedata;
 	*oczi = mpi->oczi[0];
 	if (dev_id >= (*oczi)->n_phy) {
@@ -428,7 +430,7 @@ static int block_ioctl(struct block_device *dev, fmode_t mode, unsigned cmd, uns
 int oczpcie_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 {
 	struct oczpcie_info *oczi;
-	int dev_id = oczpcie_get_dev_id_from_block_device(bdev, &oczi);
+	int dev_id = oczpcie_get_dev_id_from_block_device(bdev->bd_dev, bdev_get_queue(bdev), &oczi);
 	struct request_queue *q;
 	struct oczpcie_prv_info *mpi;
 
@@ -498,7 +500,7 @@ static void block_complete(struct oczpcie_task *task)
 		return;
 	}
 	kmem_cache_free(task->mpi->task_mem_cache, task);
-	bio_endio(bio, stat ? -EIO : 0);
+	bio_endio(bio);
 }
 
 #define MAX_WAIT	100
@@ -608,8 +610,7 @@ void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct
 	int first = 1;
 #endif
 	struct oczpcie_host_to_dev_fis *fis;
-	struct block_device *bdev = bio->bi_bdev;
-	int is_write = (bio->bi_rw & 1);
+	int is_write = (bio->bi_opf & 1);
 	int dev_id;
 	int minor_id;
 	int sg_no = 0;
@@ -623,7 +624,7 @@ void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct
 	}
 
 #ifdef	REQ_WRITE_SAME
-	if (unlikely(bio->bi_rw & REQ_WRITE_SAME)) {
+	if (unlikely(bio->bi_opf & REQ_WRITE_SAME)) {
 		err = -EIO;
 		goto error;
 	}
@@ -631,13 +632,13 @@ void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct
 
 
 	oczi = priv->oczi[0];	// not strictly needed, but compiler gets upset otherwise
-	dev_id = oczpcie_get_dev_id_from_block_device(bdev, &oczi);
+	dev_id = oczpcie_get_dev_id_from_block_device(bio_dev(bio),bio->bi_disk->queue, &oczi);
 	if (unlikely(dev_id == -1)) {
 			err = -ENODEV;
 			goto error;
 	}
 
-	minor_id = MINOR(bdev->bd_dev) >> PARTITION_SHIFT;
+	minor_id = MINOR(bio_dev(bio)) >> PARTITION_SHIFT;
 	if (unlikely(driver_halted_on_error || ((1 << minor_id) & priv->errored_phys))) {
 		err = -EIO;
 		goto error;
@@ -652,7 +653,7 @@ void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct
 
 	// flush
 #if defined(DISCARD_BARRIER) // for really, really old kernels
-	if (unlikely(bio->bi_rw & (1 << BIO_RW_BARRIER))) {
+	if (unlikely(bio->bi_opf & (1 << BIO_RW_BARRIER))) {
 		fua = 1;
 		issue_flush(priv, minor_id);
 		if (unlikely(sectors == 0)) {
@@ -661,7 +662,7 @@ void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct
 		}
 	}
 #elif	defined(RW_BARRIER)
-	if (unlikely(bio->bi_rw & (1 << RW_BARRIER))) {
+	if (unlikely(bio->bi_opf & (1 << RW_BARRIER))) {
 		fua = 1;
 		issue_flush(priv, minor_id);
 		if (unlikely(sectors == 0)) {
@@ -670,7 +671,7 @@ void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct
 		}
 	}
 #elif	defined(REQ_FLUSH)
-	if (unlikely((bio->bi_rw & REQ_FLUSH))) {
+	if (unlikely((bio->bi_opf & REQ_FLUSH))) {
 		fua = 1;
 		issue_flush(priv, minor_id);
 		if (unlikely(sectors == 0)) {
@@ -678,28 +679,28 @@ void oczpcie_make_request(struct oczpcie_prv_info *priv, int alloc_flags, struct
 			goto error;
 		}
 	}
-	if (unlikely(bio->bi_rw & REQ_FUA)) {
+	if (unlikely(bio->bi_opf & REQ_FUA)) {
 		fua = 1;
 	}
 #endif // defined(RW_BARRIER)
 
 	// discard
 #if defined(DISCARD_BARRIER)	// for really, really old kernels
-	if (unlikely(bio->bi_rw & (1 << BIO_RW_DISCARD))) {
+	if (unlikely(bio->bi_opf & (1 << BIO_RW_DISCARD))) {
 		err = issue_discard(priv, bio, minor_id, lba, sectors);
 		if (unlikely(err))
 			goto error;
 		return;
 	}
 #elif	defined(BIO_DISCARD) // for old kernels
-	if (unlikely(bio->bi_rw & BIO_DISCARD)) {
+	if (unlikely(bio->bi_opf & BIO_DISCARD)) {
 		err = issue_discard(priv, bio, minor_id, lba, sectors);
 		if (unlikely(err))
 			goto error;
 		return;
 	}
 #elif	defined(REQ_DISCARD)
-	if (unlikely(bio->bi_rw & REQ_DISCARD)) {
+	if (unlikely(bio->bi_opf & REQ_DISCARD)) {
 		err = issue_discard(priv, bio, minor_id, lba, sectors);
 		if (unlikely(err))
 			goto error;
@@ -835,7 +836,7 @@ error:
 		kfree(sg);
 	if (task)
 		kmem_cache_free(priv->task_mem_cache, task);
-	bio_endio(bio, err);
+	bio_endio(bio);
 }
 
 #if	LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)
@@ -862,20 +863,22 @@ static void zero_bio(struct bio *bio)
 
 #if	LINUX_VERSION_CODE <  KERNEL_VERSION(3,2,0)
 static int make_request(struct request_queue *q, struct bio *bio)
-#else
+#elif	LINUX_VERSION_CODE <  KERNEL_VERSION(4,14,0)
 static void make_request(struct request_queue *q, struct bio *bio)
+#else
+static blk_qc_t make_request(struct request_queue *q, struct bio *bio)
 #endif
 {
 	struct oczpcie_prv_info *priv;
 
 	if (unlikely(!disable_vca)) {
-		if (bio->bi_rw & 1) {
-			bio_endio(bio, -EPERM);
+		if (bio->bi_opf & 1) {
+			bio_endio(bio);
 			goto finished;
 		}
 		else {
 			zero_bio(bio);
-			bio_endio(bio, 0);
+			bio_endio(bio);
 			goto finished;
 		}
 	}
@@ -887,8 +890,10 @@ static void make_request(struct request_queue *q, struct bio *bio)
 finished:
 #if	LINUX_VERSION_CODE <  KERNEL_VERSION(3,2,0)
 	return 0;
-#else
+#elif	LINUX_VERSION_CODE <  KERNEL_VERSION(4,14,0)
 	return;
+#else
+	return BLK_QC_T_NONE;
 #endif
 }
 
@@ -920,7 +925,7 @@ static void command_complete(struct oczpcie_task *task)
 
 	if (task->bio) {
 		int stat = task->task_status.stat;
-		bio_endio(task->bio, stat ? -EIO : 0);
+		bio_endio(task->bio);
 	}
 	kmem_cache_free(task->mpi->task_mem_cache, task);
 }
@@ -1146,9 +1151,9 @@ static int create_block_devices(struct oczpcie_prv_info *mpi)
 		}
 
 		mpi->block_queue[i]->queuedata = mpi;
-		queue_flag_set_unlocked(QUEUE_FLAG_NONROT, mpi->block_queue[i]);
+		blk_queue_flag_set(QUEUE_FLAG_NONROT, mpi->block_queue[i]);
 		blk_queue_make_request(mpi->block_queue[i], make_request);	// do this first, it resets the limtis
-		queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, mpi->block_queue[i]);
+		blk_queue_flag_set(QUEUE_FLAG_DISCARD, mpi->block_queue[i]);
 		blk_queue_max_hw_sectors(mpi->block_queue[i], MAX_SG_ENTRY * PAGE_SIZE * 2);
 		/* max discard sectors is as follows:
 		 * We use a single block of 512 bytes.
@@ -1216,11 +1221,6 @@ static int create_block_devices(struct oczpcie_prv_info *mpi)
 		ata_get_string(ata_model, page_address(command_info.data[0]), 27, 45);
 		ata_get_string(ata_fw, page_address(command_info.data[0]), 23, 26);
 		sectors = ata_get_qword(page_address(command_info.data[0]), 100);
-		additional_support = ata_get_word(page_address(command_info.data[0]), 69);
-#ifndef	DISABLE_DISCARD_TUNING
-		if (additional_support & (1 << 5))	// bit 5 is deterministic read zeros after trim
-			mpi->block_queue[i]->limits.discard_zeroes_data = 1;
-#endif
 		free_seperate_pages(command_info.data, command_info.num_pages);
 		if (disable_vca) {
 			dev_printk(KERN_INFO, mpi->oczi[0]->dev, "Device %s, model %s, firmware revision %s, sectors %lld\n", mpi->disc[i]->disk_name, ata_model, ata_fw, sectors);
@@ -1276,9 +1276,15 @@ static void remove_card(struct oczpcie_prv_info *priv)
 		(*register_card_remove_callback)(priv);
 }
 
+#ifdef HAVE_KERNEL_TIMER_SETUP
+void timer_callback(struct timer_list *t)
+{
+	struct oczpcie_prv_info *priv = from_timer(priv, t, timer);
+#else
 void timer_callback(unsigned long param)
 {
 	struct oczpcie_prv_info *priv = (struct oczpcie_prv_info *)param;
+#endif
 	int host, phy, slot, dev, tag, i;
 	unsigned long flags = 0;
 	unsigned long now = jiffies;
@@ -1511,10 +1517,14 @@ static int oczpcie_pci_init(struct pci_dev *pdev,
 
 	add_new_card(mpi);
 
+#ifdef HAVE_KERNEL_TIMER_SETUP
+	timer_setup(&mpi->timer, timer_callback, 0);
+#else
 	init_timer(&mpi->timer);
-	mpi->timer.expires = jiffies + TIMER_TICK;
 	mpi->timer.function = timer_callback;
 	mpi->timer.data = (unsigned long)mpi;
+#endif
+	mpi->timer.expires = jiffies + TIMER_TICK;
 	add_timer(&mpi->timer);
 
 	return 0;

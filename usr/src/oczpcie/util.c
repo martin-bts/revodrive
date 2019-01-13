@@ -169,7 +169,7 @@ int copy_from_user_to_pages(struct page **pages, u8 *from, int len)
 	while (len > 0)
 	{
 		int xfer_len = len > PAGE_SIZE ? PAGE_SIZE : len;
-		if (unlikely(copy_from_user(page_address(pages[page]), from + total, xfer_len)))
+		if (unlikely(raw_copy_from_user(page_address(pages[page]), from + total, xfer_len)))
 			return -EFAULT;
 		total += xfer_len;
 		len -= xfer_len;
@@ -186,7 +186,7 @@ int copy_to_user_from_pages(u8 *to, struct page **pages, int len)
 	while (len > 0)
 	{
 		int xfer_len = len > PAGE_SIZE ? PAGE_SIZE : len;
-		if (unlikely(copy_to_user(to + total, page_address(pages[page]), xfer_len)))
+		if (unlikely(raw_copy_to_user(to + total, page_address(pages[page]), xfer_len)))
 			return -EFAULT;
 		total += xfer_len;
 		len -= xfer_len;

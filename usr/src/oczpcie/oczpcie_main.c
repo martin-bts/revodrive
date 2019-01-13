@@ -427,7 +427,11 @@ static void oczpcie_sig_remove_timer(struct oczpcie_phy *phy)
 {
 	if (phy->timer.function)
 		del_timer(&phy->timer);
+#ifdef HAVE_KERNEL_TIMER_SETUP
+	timer_setup(&phy->timer, NULL, 0);
+#else
 	phy->timer.function = NULL;
+#endif
 }
 
 void oczpcie_update_phyinfo(struct oczpcie_info *oczi, int i, int get_st)
@@ -736,9 +740,15 @@ static int oczpcie_handle_event(struct oczpcie_info *oczi, void *data, int handl
 	return ret;
 }
 
+#ifdef HAVE_KERNEL_TIMER_SETUP
+static void oczpcie_sig_time_out(struct timer_list *t)
+{
+	struct oczpcie_phy *phy = from_timer(phy, t, timer);
+#else
 static void oczpcie_sig_time_out(unsigned long tphy)
 {
 	struct oczpcie_phy *phy = (struct oczpcie_phy *)tphy;
+#endif
 	struct oczpcie_info *oczi = phy->oczi;
 	u8 phy_no;
 
@@ -798,8 +808,12 @@ void oczpcie_int_port(struct oczpcie_info *oczi, int phy_no, u32 events)
 		oczpcie_write_port_irq_mask(oczi, phy_no,
 					tmp | PHYEV_SIG_FIS);
 		if (phy->timer.function == NULL) {
+#ifdef HAVE_KERNEL_TIMER_SETUP
+			timer_setup(&phy->timer, oczpcie_sig_time_out, 0);
+#else
 			phy->timer.data = (unsigned long)phy;
 			phy->timer.function = oczpcie_sig_time_out;
+#endif
 			phy->timer.expires = jiffies + 5*HZ;
 			add_timer(&phy->timer);
 		}
